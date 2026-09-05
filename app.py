@@ -31,7 +31,7 @@ try:
                         id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                         equipo TEXT, horas_operacion REAL, temperatura_c REAL, vibracion_mm_s REAL, amperaje_a REAL)''')
     
-    # 🌟 NUEVO: AUTO-GENERADOR DE HISTORIAL PARA LA NUBE (SEEDER) 🌟
+    # AUTO-GENERADOR DE HISTORIAL PARA LA NUBE (SEEDER)
     cursor = con_init.cursor()
     cursor.execute("SELECT COUNT(*) FROM telemetria_motores")
     if cursor.fetchone()[0] == 0:
@@ -43,18 +43,23 @@ try:
         }
         ahora = datetime.now()
         for eq, (h, t_base, v_base, a_base) in equipos_ini.items():
-            for i in range(60, 0, -1): # Genera 60 puntos de historial hacia atrás
+            for i in range(60, 0, -1):
                 t_stamp = (ahora - timedelta(minutes=i*5)).strftime('%Y-%m-%d %H:%M:%S')
                 t_val = t_base + np.random.normal(0, 1.2)
                 v_val = v_base + np.random.normal(0, 0.15)
                 a_val = a_base + np.random.normal(0, 0.5)
                 cursor.execute('INSERT INTO telemetria_motores (timestamp, equipo, horas_operacion, temperatura_c, vibracion_mm_s, amperaje_a) VALUES (?, ?, ?, ?, ?, ?)', (t_stamp, eq, h, t_val, v_val, a_val))
         con_init.commit()
-    # ---------------------------------------------------------------
     con_init.close()
 except Exception: pass
 
 # --- 2. LECTURA IoT EN VIVO ---
+# Convertir columnas a decimal (float) para evitar el error int64 de Pandas
+df_base['Horas_Operacion'] = df_base['Horas_Operacion'].astype(float)
+df_base['Temperatura_C'] = df_base['Temperatura_C'].astype(float)
+df_base['Vibracion_mm_s'] = df_base['Vibracion_mm_s'].astype(float)
+df_base['Amperaje_A'] = df_base['Amperaje_A'].astype(float)
+
 df_sql = pd.DataFrame()
 try:
     conexion = sqlite3.connect('planta_industrial.db')
@@ -64,7 +69,10 @@ try:
         datos_vivo = df_sql.drop_duplicates(subset=['Equipo'])
         for _, fila in datos_vivo.iterrows():
             idx = df_base['Equipo'] == fila['Equipo']
-            df_base.loc[idx, ['Horas_Operacion', 'Temperatura_C', 'Vibracion_mm_s', 'Amperaje_A']] = [fila['Horas_Operacion'], fila['Temperatura_C'], fila['Vibracion_mm_s'], fila['Amperaje_A']]
+            df_base.loc[idx, 'Horas_Operacion'] = float(fila['Horas_Operacion'])
+            df_base.loc[idx, 'Temperatura_C'] = float(fila['Temperatura_C'])
+            df_base.loc[idx, 'Vibracion_mm_s'] = float(fila['Vibracion_mm_s'])
+            df_base.loc[idx, 'Amperaje_A'] = float(fila['Amperaje_A'])
 except Exception as e: 
     st.sidebar.error(f"Error BD: {e}")
 

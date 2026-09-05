@@ -18,12 +18,21 @@ except FileNotFoundError:
     st.error("Faltan archivos. Ejecuta 'generar_base.py' y 'ml_regresion.py' primero.")
     st.stop()
 
+# Inicialización de tablas SQL para despliegue en la nube
 try:
     con_init = sqlite3.connect('planta_industrial.db', timeout=5)
     con_init.execute("PRAGMA journal_mode=WAL;")
+    
+    # Auto-crear tabla de auditoría
     con_init.execute('''CREATE TABLE IF NOT EXISTS historial_ot (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, fecha DATETIME DEFAULT CURRENT_TIMESTAMP, 
                         equipo TEXT, ot_generada TEXT)''')
+                        
+    # Auto-crear tabla de telemetría para que la inyección en la nube no falle
+    con_init.execute('''CREATE TABLE IF NOT EXISTS telemetria_motores (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+                        equipo TEXT, horas_operacion REAL, temperatura_c REAL, vibracion_mm_s REAL, amperaje_a REAL)''')
+                        
     con_init.commit()
     con_init.close()
 except Exception: pass

@@ -4,12 +4,13 @@ import matplotlib.pyplot as plt
 import joblib
 import sqlite3 
 import requests
-from datetime import datetime
+from datetime import datetime, timedelta
+import numpy as np
 
 st.set_page_config(page_title="CMMS Predictivo Fase 4", layout="wide")
 st.title("⏱️ Panel Predictivo IoT (Planta Completa - Fase 4)")
 
-# --- 1. CARGA DE MODELO Y PREPARACIÓN SQL ---
+# --- 1. CARGA DE MODELO Y PREPARACIÓN SQL (CON AUTO-SEEDER) ---
 try:
     paquete_modelo = joblib.load('modelo_rul_planta.pkl')
     modelo_rul, columnas_entrenamiento = paquete_modelo['modelo'], paquete_modelo['columnas']
@@ -18,26 +19,43 @@ except FileNotFoundError:
     st.error("Faltan archivos. Ejecuta 'generar_base.py' y 'ml_regresion.py' primero.")
     st.stop()
 
-# Inicialización de tablas SQL para despliegue en la nube
 try:
     con_init = sqlite3.connect('planta_industrial.db', timeout=5)
     con_init.execute("PRAGMA journal_mode=WAL;")
     
-    # Auto-crear tabla de auditoría
     con_init.execute('''CREATE TABLE IF NOT EXISTS historial_ot (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, fecha DATETIME DEFAULT CURRENT_TIMESTAMP, 
                         equipo TEXT, ot_generada TEXT)''')
                         
-    # Auto-crear tabla de telemetría para que la inyección en la nube no falle
     con_init.execute('''CREATE TABLE IF NOT EXISTS telemetria_motores (
                         id INTEGER PRIMARY KEY AUTOINCREMENT, timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
                         equipo TEXT, horas_operacion REAL, temperatura_c REAL, vibracion_mm_s REAL, amperaje_a REAL)''')
-                        
-    con_init.commit()
+    
+    # 🌟 NUEVO: AUTO-GENERADOR DE HISTORIAL PARA LA NUBE (SEEDER) 🌟
+    cursor = con_init.cursor()
+    cursor.execute("SELECT COUNT(*) FROM telemetria_motores")
+    if cursor.fetchone()[0] == 0:
+        equipos_ini = {
+            'Bomba-101': (4200, 60, 2.1, 18.5), 'Faja-201': (5000, 45, 1.8, 12.0),
+            'Compresor-301': (1100, 70, 3.5, 40.0), 'Molino-401': (2900, 55, 6.0, 85.0),
+            'Bomba-102': (7800, 85, 5.2, 24.0), 'Faja-202': (6800, 70, 4.0, 18.0),
+            'Compresor-302': (7500, 90, 6.1, 50.0), 'Molino-402': (1500, 60, 2.0, 80.0)
+        }
+        ahora = datetime.now()
+        for eq, (h, t_base, v_base, a_base) in equipos_ini.items():
+            for i in range(60, 0, -1): # Genera 60 puntos de historial hacia atrás
+                t_stamp = (ahora - timedelta(minutes=i*5)).strftime('%Y-%m-%d %H:%M:%S')
+                t_val = t_base + np.random.normal(0, 1.2)
+                v_val = v_base + np.random.normal(0, 0.15)
+                a_val = a_base + np.random.normal(0, 0.5)
+                cursor.execute('INSERT INTO telemetria_motores (timestamp, equipo, horas_operacion, temperatura_c, vibracion_mm_s, amperaje_a) VALUES (?, ?, ?, ?, ?, ?)', (t_stamp, eq, h, t_val, v_val, a_val))
+        con_init.commit()
+    # ---------------------------------------------------------------
     con_init.close()
 except Exception: pass
 
 # --- 2. LECTURA IoT EN VIVO ---
+df_sql = pd.DataFrame()
 try:
     conexion = sqlite3.connect('planta_industrial.db')
     df_sql = pd.read_sql_query("SELECT * FROM telemetria_motores ORDER BY timestamp DESC", conexion)
@@ -47,7 +65,8 @@ try:
         for _, fila in datos_vivo.iterrows():
             idx = df_base['Equipo'] == fila['Equipo']
             df_base.loc[idx, ['Horas_Operacion', 'Temperatura_C', 'Vibracion_mm_s', 'Amperaje_A']] = [fila['Horas_Operacion'], fila['Temperatura_C'], fila['Vibracion_mm_s'], fila['Amperaje_A']]
-except Exception: pass 
+except Exception as e: 
+    st.sidebar.error(f"Error BD: {e}")
 
 df_maquinas = df_base.copy()
 
@@ -72,8 +91,8 @@ try:
     mantenimientos_realizados = con_roi.execute("SELECT COUNT(*) FROM historial_ot").fetchone()[0]
     con_roi.close()
     
-    costo_falla_catastrofica = 5000  # USD promedio por fallo no planificado
-    costo_mantenimiento_preventivo = 500 # USD promedio por reparación planificada
+    costo_falla_catastrofica = 5000 
+    costo_mantenimiento_preventivo = 500 
     ahorro_neto = mantenimientos_realizados * (costo_falla_catastrofica - costo_mantenimiento_preventivo)
     
     col_roi1, col_roi2, col_roi3 = st.columns(3)
@@ -136,9 +155,18 @@ with col2:
 # --- 7. ANÁLISIS HISTÓRICO ---
 st.divider()
 st.subheader(f"📊 Curva de Degradación Temporal: {seleccion if seleccion != '⚙️ Simulación Manual' else 'Selecciona un equipo arriba'}")
-if seleccion != "⚙️ Simulación Manual" and not df_sql.empty:
-    df_hist = df_sql[df_sql['Equipo'] == seleccion].head(100).sort_values('timestamp')
-    if not df_hist.empty: st.line_chart(df_hist.set_index('timestamp')[['Temperatura_C', 'Vibracion_mm_s', 'Amperaje_A']])
+try:
+    if seleccion != "⚙️ Simulación Manual":
+        if 'df_sql' in locals() and not df_sql.empty:
+            df_hist = df_sql[df_sql['Equipo'] == seleccion].head(100).sort_values('timestamp')
+            if not df_hist.empty: 
+                st.line_chart(df_hist.set_index('timestamp')[['Temperatura_C', 'Vibracion_mm_s', 'Amperaje_A']])
+            else:
+                st.info("⏳ Recolectando datos históricos del sensor... (Asegúrate de que el simulador esté corriendo)")
+        else:
+            st.warning("🔌 No hay conexión con la telemetría en vivo. Enciende el simulador (iot_sql_simulador.py).")
+except Exception as e:
+    st.error(f"Error al cargar historial: {e}")
 
 # --- 8. SIMULADOR OVERHAUL Y ALERTAS ---
 st.divider()
@@ -147,11 +175,10 @@ col3, col4 = st.columns(2)
 df_en_taller = df_reporte[df_reporte['Estado'] == 'Crítico'].copy()
 
 def enviar_alerta_telegram(mensaje):
-    # Reemplaza con tu token y chat_id de BotFather
     token = "TU_TOKEN" 
     chat_id = "TU_CHAT_ID"
     url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={mensaje}"
-    # requests.get(url) # Descomentar cuando configures el token
+    # requests.get(url) 
 
 with col3:
     if not df_en_taller.empty:

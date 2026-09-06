@@ -183,10 +183,10 @@ col3, col4 = st.columns(2)
 df_en_taller = df_reporte[df_reporte['Estado'] == 'Crítico'].copy()
 
 def enviar_alerta_telegram(mensaje):
-    token = "TU_TOKEN" 
-    chat_id = "TU_CHAT_ID"
+    token = "8051952892:AAEUqtNfMZbpmAOVye2MgQvdbiDtDZ3S6D4" 
+    chat_id = "881541023"
     url = f"https://api.telegram.org/bot{token}/sendMessage?chat_id={chat_id}&text={mensaje}"
-    # requests.get(url) 
+    requests.get(url)  # Conexión activada
 
 with col3:
     if not df_en_taller.empty:
